@@ -383,6 +383,7 @@ class TotalStockModel(models.Model):
     plating_color = models.ForeignKey(Plating_Color, on_delete=models.SET_NULL, null=True, blank=True, help_text="Plating Color")
     location = models.ManyToManyField(Location, blank=True, help_text="Multiple Locations")
     lot_id = models.CharField(max_length=50, unique=True, null=True, blank=True, help_text="Lot ID")
+    parent_lot_id = models.CharField(max_length=50, null=True, blank=True, help_text="Parent Lot ID for partial lots")
     created_at = models.DateTimeField(default=now, help_text="Timestamp of the record")
     # day planning missing qty in day planning pick table
     dp_missing_qty = models.IntegerField(default=0, help_text="Missing quantity in day planning")

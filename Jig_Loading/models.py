@@ -165,6 +165,9 @@ class JigDetails(models.Model):
     updated_lot_qty = models.IntegerField(default=0, blank=True, null=True)
     original_lot_qty = models.IntegerField(default=0, blank=True, null=True)
     tray_info = models.JSONField(default=list, blank=True, null=True)
+    delink_tray_info = models.JSONField(default=list, blank=True, null=True)
+    partial_tray_info = models.JSONField(default=list, blank=True, null=True)
+    half_filled_tray_info = models.JSONField(default=list, blank=True, null=True)
     
 
     forging = models.CharField(max_length=100)
@@ -255,10 +258,48 @@ class JigLoadingManualDraft(models.Model):
     jig_cases_remaining_count = models.IntegerField(default=0, blank=True, null=True)
     updated_lot_qty = models.IntegerField(default=0, blank=True, null=True)
     original_lot_qty = models.IntegerField(default=0, blank=True, null=True)
-    tray_info = models.JSONField(default=list, blank=True, null=True)
+    jig_id = models.CharField(max_length=100, blank=True, null=True)
+    delink_tray_info = models.JSONField(default=list, blank=True, null=True)
+    delink_tray_qty = models.IntegerField(default=0, blank=True, null=True)
+    delink_tray_count = models.IntegerField(default=0, blank=True, null=True)
+    half_filled_tray_info = models.JSONField(default=list, blank=True, null=True)
+    half_filled_tray_qty = models.IntegerField(default=0, blank=True, null=True)
+    jig_capacity = models.IntegerField(default=0, blank=True, null=True)
+    broken_hooks = models.IntegerField(default=0, blank=True, null=True)
+    loaded_cases_qty = models.IntegerField(default=0, blank=True, null=True)
+    draft_status = models.CharField(max_length=20, choices=[('active', 'Active'), ('submitted', 'Submitted')], default='active')
 
     class Meta:
         unique_together = ['batch_id', 'lot_id', 'user']  # <-- FIXED!
 
     def __str__(self):
         return f"Draft: {self.batch_id} by {self.user.username}"
+                    
+# Jig Completed model - duplicate of JigLoadingManualDraft
+class JigCompleted(models.Model):
+    batch_id = models.CharField(max_length=100, db_index=True)
+    lot_id = models.CharField(max_length=100, db_index=True)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    draft_data = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+    jig_cases_remaining_count = models.IntegerField(default=0, blank=True, null=True)
+    updated_lot_qty = models.IntegerField(default=0, blank=True, null=True)
+    original_lot_qty = models.IntegerField(default=0, blank=True, null=True)
+    jig_id = models.CharField(max_length=100, blank=True, null=True)
+    delink_tray_info = models.JSONField(default=list, blank=True, null=True)
+    delink_tray_qty = models.IntegerField(default=0, blank=True, null=True)
+    delink_tray_count = models.IntegerField(default=0, blank=True, null=True)
+    half_filled_tray_info = models.JSONField(default=list, blank=True, null=True)
+    half_filled_tray_qty = models.IntegerField(default=0, blank=True, null=True)
+    jig_capacity = models.IntegerField(default=0, blank=True, null=True)
+    broken_hooks = models.IntegerField(default=0, blank=True, null=True)
+    loaded_cases_qty = models.IntegerField(default=0, blank=True, null=True)
+    draft_status = models.CharField(max_length=20, choices=[('active', 'Active'), ('submitted', 'Submitted')], default='active')
+
+    class Meta:
+        unique_together = ['batch_id', 'lot_id', 'user']
+        verbose_name = "Jig Completed"
+        verbose_name_plural = "Jig Completed"
+
+    def __str__(self):
+        return f"Jig Completed: {self.batch_id} by {self.user.username}"

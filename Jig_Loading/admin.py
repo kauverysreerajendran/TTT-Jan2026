@@ -79,48 +79,43 @@ class JigAdmin(admin.ModelAdmin):
     clear_user_locks.short_description = "Clear user locks for selected jigs"
 
 
-# Manual Drafts Table
+# Jig Load Tray ID Table
+class JigLoadTrayIdAdmin(admin.ModelAdmin):
+    list_display = ['tray_id', 'lot_id', 'tray_quantity', 'batch_id', 'user', 'date', 'delink_tray', 'IP_tray_verified', 'rejected_tray']
+    list_filter = ['delink_tray', 'IP_tray_verified', 'rejected_tray', 'date', 'user']
+    search_fields = ['tray_id', 'lot_id', 'batch_id__batch_id']
+    readonly_fields = ['date']
+    ordering = ['-date']
+
+
+# Bath Numbers Table
+class BathNumbersAdmin(admin.ModelAdmin):
+    list_display = ['bath_number', 'bath_type', 'is_active', 'created_at']
+    list_filter = ['bath_type', 'is_active', 'created_at']
+    search_fields = ['bath_number', 'bath_type']
+    readonly_fields = ['created_at']
+
+
+# Auto Save Table
+class JigAutoSaveAdmin(admin.ModelAdmin):
+    list_display = ['user', 'batch_id', 'lot_id', 'session_key', 'updated_at']
+    list_filter = ['updated_at', 'user']
+    search_fields = ['batch_id', 'lot_id', 'user__username', 'session_key']
+    readonly_fields = ['updated_at', 'auto_save_data']
+
+
 class JigLoadingManualDraftAdmin(admin.ModelAdmin):
-    list_display = [
-        'batch_id',
-        'lot_id',
-        'user',
-        'updated_at',
-        'get_jig_id',
-        'get_no_of_cycle',
-        'get_broken_hooks',
-        'get_tray_info',
-        'jig_cases_remaining_count',
-        'updated_lot_qty',
-        'original_lot_qty',
-    ]
-    search_fields = ['batch_id', 'lot_id', 'user__username']
-    readonly_fields = ['updated_at', 'draft_data', 'get_jig_id', 'get_no_of_cycle', 'get_broken_hooks', 'get_tray_info']
+    list_display = ['lot_id', 'jig_id', 'user', 'delink_tray_count', 'updated_lot_qty', 'broken_hooks', 'draft_status', 'updated_at', 'original_lot_qty', 'jig_capacity', 'loaded_cases_qty', 'delink_tray_qty', 'half_filled_tray_qty']
+    list_filter = ['updated_at', 'user', 'draft_status']
+    search_fields = ['lot_id', 'jig_id', 'user__username']
+    readonly_fields = ['updated_at', 'draft_data']
 
-    def get_jig_id(self, obj):
-        return obj.draft_data.get('jig_id', '-')
-    get_jig_id.short_description = 'Jig ID'
 
-    def get_no_of_cycle(self, obj):
-        return obj.draft_data.get('no_of_cycle', '-')
-    get_no_of_cycle.short_description = 'No of Cycle'
-
-    def get_broken_hooks(self, obj):
-        return obj.draft_data.get('broken_buildup_hooks', '-')
-    get_broken_hooks.short_description = 'Broken Hooks'
-
-    def get_tray_info(self, obj):
-        trays = obj.tray_info or []
-        if not trays:
-            return "-"
-        return ", ".join([f"{t.get('tray_id', '')} ({t.get('tray_qty', '')})" for t in trays])
-    get_tray_info.short_description = 'Tray Info (ID & Qty)'
-
-    # Optionally, show if "Add Model" was clicked (if you store this in draft_data)
-    def has_added_model(self, obj):
-        return obj.draft_data.get('add_model_clicked', False)
-    has_added_model.boolean = True
-    has_added_model.short_description = 'Add Model Clicked'
+class JigCompletedAdmin(admin.ModelAdmin):
+    list_display = ['lot_id', 'jig_id', 'user', 'delink_tray_count', 'updated_lot_qty', 'broken_hooks', 'draft_status', 'updated_at', 'original_lot_qty', 'jig_capacity', 'loaded_cases_qty', 'delink_tray_qty', 'half_filled_tray_qty']
+    list_filter = ['updated_at', 'user', 'draft_status']
+    search_fields = ['lot_id', 'jig_id', 'user__username']
+    readonly_fields = ['updated_at', 'draft_data']
 
 
 # Jig Details Table
@@ -151,9 +146,10 @@ class JigDetailsAdmin(admin.ModelAdmin):
 
 
 admin.site.register(Jig, JigAdmin)
-admin.site.register(JigLoadTrayId)
+admin.site.register(JigLoadTrayId, JigLoadTrayIdAdmin)
 admin.site.register(JigLoadingMaster, JigLoadingMasterAdmin)
 admin.site.register(JigDetails, JigDetailsAdmin)
-admin.site.register(BathNumbers)
-admin.site.register(JigAutoSave)
+admin.site.register(BathNumbers, BathNumbersAdmin)
+admin.site.register(JigAutoSave, JigAutoSaveAdmin)
 admin.site.register(JigLoadingManualDraft, JigLoadingManualDraftAdmin)
+admin.site.register(JigCompleted, JigCompletedAdmin)

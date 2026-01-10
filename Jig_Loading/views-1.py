@@ -398,8 +398,7 @@ class JigAddModalDataView(TemplateView):
             # Auto-fill for new entries with comprehensive defaults
             modal_data['nickel_bath_type'] = "Bright"  # Default
             modal_data['loaded_cases_qty'] = stock.total_stock
-            # --- FIX: Cap loaded_hooks at jig_capacity for overflow scenarios ---
-            modal_data['loaded_hooks'] = min(stock.total_stock, modal_data['jig_capacity'])
+            modal_data['loaded_hooks'] = stock.total_stock
             # --- FIX: Only allow empty_hooks > 0 if lot qty < jig capacity, else always 0 ---
             if modal_data['loaded_cases_qty'] < modal_data['jig_capacity']:
                 modal_data['empty_hooks'] = modal_data['jig_capacity'] - modal_data['loaded_cases_qty']
@@ -492,56 +491,37 @@ class JigAddModalDataView(TemplateView):
             modal_data['half_filled_tray_cases'] = leftover_cases
             modal_data['remaining_cases'] = leftover_cases
 
-            # Calculate full trays and partial for jig_capacity (to fill delink up to capacity)
+            # For delink: Only full trays (jig_capacity // tray_capacity)
             tray_capacity = modal_data['tray_distribution']['current_lot']['tray_capacity']
             full_trays = modal_data['jig_capacity'] // tray_capacity
-            partial_cases = modal_data['jig_capacity'] % tray_capacity
 
-            # Build delink_table with full trays + partial tray (if any) to sum to jig_capacity
-            delink_table = []
-            for i in range(full_trays):
-                delink_table.append({
+            # Prepare delink table for only full trays
+            modal_data['delink_table'] = [
+                {
                     'tray_id': '',
                     'tray_quantity': tray_capacity,
                     'model_bg': self._get_model_bg(i + 1),
                     'original_quantity': tray_capacity,
                     'excluded_quantity': 0,
-                })
-            if partial_cases > 0:
-                delink_table.append({
-                    'tray_id': '',
-                    'tray_quantity': partial_cases,
-                    'model_bg': self._get_model_bg(full_trays + 1),
-                    'original_quantity': partial_cases,
-                    'excluded_quantity': 0,
-                })
-            modal_data['delink_table'] = delink_table
+                }
+                for i in range(full_trays)
+            ]
 
-            # Prepare half-filled tray for the leftover cases (excess)
+            # Prepare half-filled tray for the leftover cases
             half_filled_distribution = self._distribute_half_filled_trays(leftover_cases, tray_capacity)
             modal_data['tray_distribution']['half_filled_lot'] = {
                 'total_cases': leftover_cases,
                 'distribution': half_filled_distribution,
                 'total_trays': half_filled_distribution['total_trays'] if half_filled_distribution else 0
             }
-            
-            # Update Current Lot distribution to match jig capacity
-            modal_data['tray_distribution']['current_lot'] = {
-                'total_cases': modal_data['jig_capacity'],
-                'effective_capacity': modal_data['jig_capacity'],
-                'broken_hooks': 0,
-                'tray_capacity': tray_capacity,
-                'distribution': self._distribute_cases_to_trays(modal_data['jig_capacity'], tray_capacity),
-                'total_trays': len(delink_table)
-            }
-            
             modal_data['open_with_half_filled'] = True
 
-            # Set loaded_cases_qty to 0/jig_capacity for display (will update on scan)
+            # Set loaded_cases_qty to 0/jig_capacity for display
             modal_data['loaded_cases_qty'] = f"0/{modal_data['jig_capacity']}"
-            modal_data['excess_message'] = f"{leftover_cases} cases are in excess"
+            modal_data['excess_message'] = f"{modal_data['original_lot_qty'] - modal_data['jig_capacity']} cases are in excess"
         else:
             modal_data['open_with_half_filled'] = False
+            # For broken hooks or normal case, keep existing logic for delink_table and loaded_cases_qty
             modal_data['loaded_cases_qty'] = f"0/{modal_data['original_lot_qty']}"
             modal_data['excess_message'] = ""
 
@@ -778,46 +758,31 @@ class JigAddModalDataView(TemplateView):
         """
         Distribute half-filled cases into trays with scan requirements.
         Partial trays require scanning, full trays can auto-assign existing tray IDs.
-        For excess lots: put partial tray first (Scan Required), then full trays (Auto Assigned).
-        Example for 22 cases (capacity 12): Tray 1 (10 cases, Scan), Tray 2 (12 cases, Auto).
         """
-        if half_filled_cases <= 0 or not tray_capacity:
+        if half_filled_cases <= 0:
             return None
             
-        full_trays = half_filled_cases // tray_capacity
-        remainder_cases = half_filled_cases % tray_capacity
+        partial_cases = half_filled_cases
         
         trays = []
         tray_number = 1
         
-        # Add partial tray FIRST (requires scanning, top tray for half-filled section)
-        if remainder_cases > 0:
+        # Add partial tray (requires scanning)
+        if partial_cases > 0:
             trays.append({
                 'tray_number': tray_number,
-                'cases': remainder_cases,
+                'cases': partial_cases,
                 'is_full': False,
                 'scan_required': True,
                 'tray_type': 'partial',
-                'placeholder': f'Scan Tray ID ({remainder_cases} pcs)'
-            })
-            tray_number += 1
-            
-        # Add full trays (auto-assignment from existing trays)
-        for i in range(full_trays):
-            trays.append({
-                'tray_number': tray_number,
-                'cases': tray_capacity,
-                'is_full': True,
-                'scan_required': False,
-                'tray_type': 'full',
-                'info': 'Auto Assigned'
+                'placeholder': f'Scan Tray ID ({partial_cases} pcs)'
             })
             tray_number += 1
         
         return {
             'total_cases': half_filled_cases,
-            'full_trays_count': full_trays,
-            'partial_tray_cases': remainder_cases,
+            'full_trays_count': 0,
+            'partial_tray_cases': partial_cases if partial_cases > 0 else 0,
             'total_trays': len(trays),
             'trays': trays,
             'scan_required_trays': len([t for t in trays if t.get('scan_required', False)])
@@ -1340,11 +1305,8 @@ class JigSubmitAPIView(APIView):
                 tray_capacity = 16 if batch.tray_type == 'Normal' else 12  # fallback
             
             # Calculate correct tray distribution for effective_loaded_cases
-            # For overflow scenarios, cap remaining_cases at jig capacity
-            jig_capacity = data.get('jig_capacity', 0)
-            remaining_cases = min(effective_loaded_cases, jig_capacity) if jig_capacity > 0 else effective_loaded_cases
-            
             corrected_delinked_trays = []
+            remaining_cases = effective_loaded_cases
             
             for i, delinked_tray in enumerate(delinked_trays):
                 tray_id = delinked_tray.get('tray_id')
@@ -1363,7 +1325,6 @@ class JigSubmitAPIView(APIView):
                     })
             
             # NEW: If there's remaining_cases > 0 and half-filled trays exist, add the partial tray to delinked trays
-            # For overflow scenarios, this partial tray should only get the cases that fit within jig capacity
             if remaining_cases > 0 and half_filled_trays:
                 # Use the first (and typically only) half-filled tray
                 partial_tray = half_filled_trays[0]
@@ -1371,7 +1332,7 @@ class JigSubmitAPIView(APIView):
                 if partial_tray_id:
                     corrected_delinked_trays.append({
                         'tray_id': partial_tray_id,
-                        'tray_qty': str(remaining_cases),  # Cases that fit within jig capacity
+                        'tray_qty': str(remaining_cases),  # The remaining cases (e.g., 7)
                         'row_index': partial_tray.get('row_index', len(corrected_delinked_trays))
                     })
                     remaining_cases = 0  # Ensure no further remainder
@@ -1429,21 +1390,17 @@ class JigSubmitAPIView(APIView):
                 pass  # Keep empty jig_type
             
             # Create new lot for half-filled tray (stays in Pick Table)
-            # This should happen for overflow scenarios (lot qty > jig capacity) OR when broken_hooks > 0
+            # This should happen when broken_hooks > 0, regardless of half_filled_trays data
             new_lot_ids_list = []
-            excess_cases = max(0, original_lot_qty - jig_capacity)
-            
-            if broken_hooks_qty > 0 or excess_cases > 0:
-                # Determine the quantity for the new lot
-                new_lot_qty = broken_hooks_qty if broken_hooks_qty > 0 else excess_cases
-                new_lot_id = f"LID{timezone.now().strftime('%d%m%Y%H%M%S')}{new_lot_qty:04d}"
-                logger.info(f"🆕 Creating new lot for {'broken hooks' if broken_hooks_qty > 0 else 'excess'} cases: {new_lot_id} with {new_lot_qty} cases")
+            if broken_hooks_qty > 0:
+                new_lot_id = f"LID{timezone.now().strftime('%d%m%Y%H%M%S')}{broken_hooks_qty:04d}"
+                logger.info(f"🆕 Creating new lot for broken hooks cases: {new_lot_id} with {broken_hooks_qty} cases")
                 
                 new_lot = TotalStockModel.objects.create(
                     batch_id=stock.batch_id,
                     model_stock_no=stock.model_stock_no,
                     version=stock.version,
-                    total_stock=new_lot_qty,  # Use appropriate quantity
+                    total_stock=broken_hooks_qty,  # Use broken hooks quantity
                     polish_finish=stock.polish_finish,
                     plating_color=stock.plating_color,
                     lot_id=new_lot_id,
@@ -1462,14 +1419,13 @@ class JigSubmitAPIView(APIView):
                 if half_filled_trays:
                     for half_filled_tray in half_filled_trays:
                         tray_id = half_filled_tray.get('tray_id')
-                        tray_qty = int(half_filled_tray.get('tray_qty', new_lot_qty))
                         if tray_id:
-                            logger.info(f"🔄 Creating tray {tray_id} for new lot {new_lot_id} with qty {tray_qty}")
+                            logger.info(f"🔄 Creating tray {tray_id} for new lot {new_lot_id}")
                             # Always create new tray entry for new lot_id
                             JigLoadTrayId.objects.create(
                                 lot_id=new_lot_id,
                                 tray_id=tray_id,
-                                tray_quantity=tray_qty,  # Use the actual tray quantity from half_filled_trays
+                                tray_quantity=broken_hooks_qty,  # Use broken hooks quantity
                                 batch_id=batch,
                                 user=user,
                                 date=timezone.now()
@@ -1544,12 +1500,15 @@ def validate_lock_jig_id(request):
         logger.info(f"🔍 Drafted jig current batch query result: {drafted_jig_current_batch}")
 
         if drafted_jig_current_batch:
-            # Allow reuse by same user for any lot in same batch
-            if drafted_jig_current_batch.current_user == user:
-                logger.info("✅ Same user, same batch - allowing")
+            # Only allow if same user, same batch, and same lot
+            if (
+                drafted_jig_current_batch.current_user == user and
+                getattr(drafted_jig_current_batch, 'lot_id', None) == lot_id
+            ):
+                logger.info("✅ Same user, same batch, same lot - allowing")
                 return JsonResponse({'valid': True, 'message': 'Jig ID is valid'}, status=200)
             else:
-                logger.info(f"❌ Jig ID in use for another user: {drafted_jig_current_batch.current_user.username}")
+                logger.info(f"❌ Jig ID in use for another row or user: {drafted_jig_current_batch.current_user.username}")
                 return JsonResponse({'valid': False, 'message': f'Jig ID is being used by {drafted_jig_current_batch.current_user.username}.'}, status=200)
 
         # If not drafted for this batch, check if drafted for any other batch
@@ -1568,17 +1527,6 @@ def validate_lock_jig_id(request):
             else:
                 logger.info(f"❌ Different user for different batch: {drafted_jig_other_batch.current_user.username}")
                 return JsonResponse({'valid': False, 'message': f'Jig ID is being used by {drafted_jig_other_batch.current_user.username}.'}, status=200)
-
-        # Check if jig is submitted but not unloaded
-        submitted_not_unloaded = JigDetails.objects.filter(
-            jig_qr_id=jig_id,
-            draft_save=False,
-            unload_over=False
-        ).exists()
-
-        if submitted_not_unloaded:
-            logger.info(f"❌ Jig ID {jig_id} is submitted but not unloaded")
-            return JsonResponse({'valid': False, 'message': 'Jig ID is currently in use (submitted but not unloaded)'}, status=200)
 
         # Check if jig_id exists in database
         try:
