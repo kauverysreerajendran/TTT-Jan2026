@@ -1586,16 +1586,19 @@ class JigSubmitAPIView(APIView):
                     complete_half_filled_tray_info = [{'tray_id': t['tray_id'], 'cases': t['excluded_qty']} for t in effective_trays if t['excluded_qty'] > 0]
                 else:
                     # No broken hooks, distribute complete table cases normally
-                    existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('id')
+                    existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('tray_id')
                     # Take enough trays for jig_capacity
                     total_cases = 0
                     for tray in existing_trays:
                         if total_cases >= jig_capacity:
-                            break
+                            complete_half_filled_tray_info.append({'tray_id': tray.tray_id, 'cases': tray.tray_quantity})
+                            continue
                         cases_to_take = min(tray.tray_quantity, jig_capacity - total_cases)
                         complete_delink_tray_info.append({'tray_id': tray.tray_id, 'cases': cases_to_take})
                         total_cases += cases_to_take
-                    complete_half_filled_tray_info = []
+                        if cases_to_take < tray.tray_quantity:
+                            remaining_cases = tray.tray_quantity - cases_to_take
+                            complete_half_filled_tray_info.append({'tray_id': tray.tray_id, 'cases': remaining_cases})
                 
                 # Update delink_tray_info and half_filled_tray_info for the response
                 delink_tray_info = complete_delink_tray_info
