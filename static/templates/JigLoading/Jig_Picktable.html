@@ -2003,6 +2003,7 @@
                       data-batch-id="{{ data.batch_id }}"
                       data-stock-lot-id="{{ data.stock_lot_id }}"
                       data-model-no="{{ data.model_stock_no__model_no|default:'' }}"
+                      data-plating-stk-no="{{ data.plating_stk_no|default:'' }}"
                       data-total-batch-quantity="{{ data.display_qty|default:0 }}"
                       data-missing-qty="{{ data.missing_qty|default:0 }}"
                       data-physical-qty="{{ data.physical_qty|default:0 }}"
@@ -2375,7 +2376,7 @@
         <div style="margin-top: 4px">
           <span
             id="modalLotQty_Jig"
-            style="font-weight: 600; color: #e67e22"
+            style="font-weight: 600; color: #3c3c3c"
           ></span>
           <span
             id="modalMissingQty_Jig"
@@ -2402,9 +2403,9 @@
       <h5 style="margin: 0; font-weight: 700; color: #028084">
         Jig Loading - Tray Scan
       </h5>
-      <button id="trayValidateBtn_Jig" class="tray-validate-btn" type="button">
+<!--       <button id="trayValidateBtn_Jig" class="tray-validate-btn" type="button">
         Tray Validate
-      </button>
+      </button> -->
     </div>
 
     <div id="trayScanDetails_Jig" class="table-grid tray-scan-table"></div>
@@ -2649,8 +2650,6 @@
 
 <!-- Add Jig button - rendering (Modal Popup - Delink Information Table) -->
 <script nonce="{{ csp_nonce }}">
-
-
 (function () {
   // Enhanced success alert helper for "Draft" button with better z-index handling
   function showSuccess(title, onComplete) {
@@ -2857,6 +2856,7 @@ if (data.valid === true) {
         const batchId = link.getAttribute("data-batch-id");
         const lotId = link.getAttribute("data-stock-lot-id");
         const modelNo = link.getAttribute("data-model-no") || "";
+        const platingStkNo = link.getAttribute("data-plating-stk-no") || "";
         const lotQty = link.getAttribute("data-total-batch-quantity") || "0";
         const missingQty = link.getAttribute("data-missing-qty") || "0";
         const physicalQty = link.getAttribute("data-physical-qty") || "0";
@@ -2868,16 +2868,11 @@ if (data.valid === true) {
         document.getElementById("trayModalUserImg_Jig").src = modelImg;
         document.getElementById(
           "modalModelNo_Jig"
-        ).textContent = `Model No: ${modelNo}`;
+        ).textContent = `Model No: ${platingStkNo}`;
         document.getElementById(
           "modalLotQty_Jig"
         ).textContent = `Lot Qty: ${lotQty}`;
-        document.getElementById(
-          "modalMissingQty_Jig"
-        ).textContent = `Missing Qty: ${missingQty}`;
-        document.getElementById(
-          "modalPhysicalQty_Jig"
-        ).textContent = `Physical Qty: ${physicalQty}`;
+        
 
         modal.classList.add("open");
 
@@ -2931,7 +2926,7 @@ if (data.valid === true) {
       });
     }
 
-    // Tray validate
+    // Tray validate in view icon - Pick Table
     const trayValidateBtn = document.getElementById("trayValidateBtn_Jig");
     if (trayValidateBtn) {
       trayValidateBtn.addEventListener("click", async function () {
@@ -4216,6 +4211,48 @@ if (submitJigBtn) {
 
     console.log("🚀 Submitting jig data for:", { batchId, lotId, jigQrId });
 
+    // Validate before submission
+    const validationErrors = [];
+    
+    // Check if all required fields are filled
+    if (!jigQrId.trim()) {
+      validationErrors.push("Jig ID is required");
+    }
+    
+    // Check for any tray validation errors
+    const errorInputs = document.querySelectorAll(".tray-id-input[data-error='true']");
+    if (errorInputs.length > 0) {
+      validationErrors.push(`${errorInputs.length} tray ID(s) have validation errors`);
+    }
+    
+    // Check if jig ID has validation errors
+    const jigIdInput = document.getElementById("jigIdInput");
+    const jigErrorAlert = jigIdInput?.parentElement?.querySelector('.jig-id-error-alert');
+    if (jigErrorAlert && !jigErrorAlert.style.display === 'none') {
+      validationErrors.push("Jig ID validation failed");
+    }
+    
+    // Check if empty hooks is zero (requirement for submission)
+    const emptyHooks = parseInt(document.getElementById("emptyHooksInput")?.value || 0);
+    if (emptyHooks !== 0) {
+      validationErrors.push("Empty hooks must be 0 to submit");
+    }
+    
+    // Show validation errors if any
+    if (validationErrors.length > 0) {
+      if (window.Swal) {
+        Swal.fire({
+          icon: "error",
+          title: "Validation Failed",
+          html: "Please fix the following errors before submitting:<br><br>• " + validationErrors.join("<br>• "),
+          showConfirmButton: true
+        });
+      } else {
+        alert("Validation Failed:\n\n• " + validationErrors.join("\n• "));
+      }
+      return; // Stop submission
+    }
+
     // Collect data
     const submitData = {
       batch_id: batchId,
@@ -4258,7 +4295,11 @@ if (submitJigBtn) {
 
       if (result.success) {
         showSuccess("Jig submitted successfully", function() {
-          window.location.href = "/jig_loading/JigCompletedTable/";
+          // Close the modal after success
+          const modal = document.getElementById("jigAddModal");
+          if (modal) {
+            modal.classList.remove("open");
+          }
         });
       } else {
         if (window.Swal) {

@@ -214,6 +214,7 @@ class JigCompleted(models.Model):
     pick_remarks = models.TextField(blank=True, null=True)
     bath_numbers = models.ForeignKey('BathNumbers', on_delete=models.SET_NULL, blank=True, null=True)
     no_of_model_cases = models.TextField(blank=True, null=True)
+    partial_lot_id = models.CharField(max_length=100, blank=True, null=True, help_text="New lot ID for remaining cases in partial submission")
 
     class Meta:
         unique_together = ['batch_id', 'lot_id', 'user']
