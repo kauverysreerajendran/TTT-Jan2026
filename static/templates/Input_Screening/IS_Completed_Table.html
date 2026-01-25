@@ -2583,6 +2583,23 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 </script>
 
+<script nonce="{{ csp_nonce }}">
+// Disable future dates for From Date input
+document.addEventListener('DOMContentLoaded', function() {
+  const today = new Date().toISOString().split('T')[0];
+  const fromDateInput = document.getElementById('from-date-simple');
+  if (fromDateInput) {
+    fromDateInput.setAttribute('max', today);
+    fromDateInput.addEventListener('change', function() {
+      if (this.value > today) {
+        this.value = today;
+        alert('Future dates are not allowed. Date has been set to today.');
+      }
+    });
+  }
+});
+</script>
+
 
 
 {% endblock %} {% endblock content %}

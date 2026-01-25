@@ -5783,6 +5783,7 @@ function generateDynamicTrayIdInputs(row, quantity, trayIdCell) {
     const trayInput = document.createElement('input');
     trayInput.type = 'text';
     trayInput.className = 'form-control rejection-tray-id-input';
+    trayInput.maxLength = 9;
     trayInput.style.cssText = `
       flex: 1; font-size: 12px; padding: 6px 10px;
       border: 2px solid #ced4da; border-radius: 6px;
@@ -9470,6 +9471,7 @@ function showAcceptedTrayModal(rescanData, lotId, isDraft) {
                  id="topTrayIdInput" 
                  placeholder="Scan Tray ID..." 
                  value="${draftTrayId}"
+                 maxlength="9"
                  style="width: 100%; max-width: 280px; padding: 8px 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 14px; transition: all 0.3s ease; background: #fff; ${inputStyle} ${draftTrayId ? 'background-color: #d4edda; border-color: #28a745;' : ''}" 
                  class="top-tray-id-input" 
                  ${(!isDraft && draftTrayId) ? 'readonly' : ''} />
@@ -9759,6 +9761,7 @@ function loadDelinkTrayData(lotId) {
                      class="form-control delink-tray-input" 
                      placeholder="Scan Tray ID for Delink" 
                      value=""
+                     maxlength="9"
                      style="width: 100%; padding: 4px 6px; font-size: 11px; border: 1px solid #ddd; border-radius: 3px; background: #fff; height: 24px;" 
                      data-row="${tray.sno}"
                      data-expected-qty="${tray.tray_quantity}" />

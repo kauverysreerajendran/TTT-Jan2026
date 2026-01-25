@@ -4216,12 +4216,21 @@ def reject_check_tray_id_simple(request):
 
     tray_obj = IPTrayId.objects.filter(tray_id=tray_id, lot_id=current_lot_id).first()
     if not tray_obj:
-        return JsonResponse({
-            'exists': False,
-            'valid_for_rejection': False,
-            'error': 'Tray not found in lot',
-            'status_message': 'Not Found'
-        })
+        # Check if it's a delinked tray from Jig Loading
+        if JigLoadTrayId.objects.filter(tray_id=tray_id).exists():
+            return JsonResponse({
+                'exists': True,
+                'valid_for_rejection': True,
+                'status_message': 'Delinked Tray Available',
+                'validation_type': 'delinked_tray'
+            })
+        else:
+            return JsonResponse({
+                'exists': False,
+                'valid_for_rejection': False,
+                'error': 'Tray not found in lot',
+                'status_message': 'Not Found'
+            })
 
     if not getattr(tray_obj, 'IP_tray_verified', False):
         return JsonResponse({

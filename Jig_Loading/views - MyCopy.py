@@ -116,6 +116,13 @@ class JigView(TemplateView):
                 else:
                     lot_status = 'Yet to Start'
                     lot_status_class = 'lot-status-yet'
+                    
+                    # Update lot_qty based on the last process module
+                    if stock.last_process_module == 'Brass Audit':
+                        lot_qty = stock.brass_audit_physical_qty or lot_qty
+                    elif stock.last_process_module == 'Brass QC':
+                        lot_qty = stock.brass_physical_qty or lot_qty
+                    # Add more conditions for other modules if needed
 
             master_data.append({
                 'batch_id': stock.batch_id.batch_id if stock.batch_id else '',
@@ -135,15 +142,14 @@ class JigView(TemplateView):
                 'lot_status': lot_status,
                 'lot_status_class': lot_status_class,
             })
-        context['master_data'] = master_data
         
         # Pagination: 10 rows per page
         paginator = Paginator(master_data, 10)
-        page_number = self.request.GET.get('page')
+        page_number = self.request.GET.get('page', 1)
         page_obj = paginator.get_page(page_number)
-        context['page_obj'] = page_obj
-        context['master_data'] = page_obj.object_list
         
+        context['master_data'] = page_obj.object_list
+        context['page_obj'] = page_obj
         return context 
 
 # Tray Info API View
@@ -325,7 +331,7 @@ class JigAddModalDataView(TemplateView):
         elif batch and batch.model_stock_no and batch.model_stock_no.plating_stk_no:
             plating_stk_no = batch.model_stock_no.plating_stk_no
         return plating_stk_no
-# Comprehensive modal data preparation method    
+    
     def _prepare_modal_data(self, request, batch, model_master, stock, jig_qr_id, lot_id, broken_hooks=0):
         """
         Comprehensive modal data preparation including all calculations and validations.
@@ -562,15 +568,16 @@ class JigAddModalDataView(TemplateView):
         # --- Overflow Handling: Lot Qty > Jig Capacity ---
         if modal_data['original_lot_qty'] > modal_data['jig_capacity'] and modal_data['broken_buildup_hooks'] == 0:
             # Only apply this logic if there are NO broken hooks
-            # Calculate full trays for jig_capacity
-            tray_capacity = modal_data['tray_distribution']['current_lot']['tray_capacity']
-            full_trays = modal_data['jig_capacity'] // tray_capacity
-            effective_loaded = full_trays * tray_capacity
-            leftover_cases = modal_data['original_lot_qty'] - effective_loaded
+            leftover_cases = modal_data['original_lot_qty'] - modal_data['jig_capacity']
             modal_data['half_filled_tray_cases'] = leftover_cases
             modal_data['remaining_cases'] = leftover_cases
 
-            # Build delink_table with only full trays
+            # Calculate full trays and partial for jig_capacity (to fill delink up to capacity)
+            tray_capacity = modal_data['tray_distribution']['current_lot']['tray_capacity']
+            full_trays = modal_data['jig_capacity'] // tray_capacity
+            partial_cases = modal_data['jig_capacity'] % tray_capacity
+
+            # Build delink_table with full trays + partial tray (if any) to sum to jig_capacity
             delink_table = []
             for i in range(full_trays):
                 delink_table.append({
@@ -578,6 +585,14 @@ class JigAddModalDataView(TemplateView):
                     'tray_quantity': tray_capacity,
                     'model_bg': self._get_model_bg(i + 1),
                     'original_quantity': tray_capacity,
+                    'excluded_quantity': 0,
+                })
+            if partial_cases > 0:
+                delink_table.append({
+                    'tray_id': '',
+                    'tray_quantity': partial_cases,
+                    'model_bg': self._get_model_bg(full_trays + 1),
+                    'original_quantity': partial_cases,
                     'excluded_quantity': 0,
                 })
             modal_data['delink_table'] = delink_table
@@ -590,20 +605,20 @@ class JigAddModalDataView(TemplateView):
                 'total_trays': half_filled_distribution['total_trays'] if half_filled_distribution else 0
             }
             
-            # Update Current Lot distribution to match effective_loaded
+            # Update Current Lot distribution to match jig capacity
             modal_data['tray_distribution']['current_lot'] = {
-                'total_cases': effective_loaded,
-                'effective_capacity': effective_loaded,
+                'total_cases': modal_data['jig_capacity'],
+                'effective_capacity': modal_data['jig_capacity'],
                 'broken_hooks': 0,
                 'tray_capacity': tray_capacity,
-                'distribution': self._distribute_cases_to_trays(effective_loaded, tray_capacity),
+                'distribution': self._distribute_cases_to_trays(modal_data['jig_capacity'], tray_capacity),
                 'total_trays': len(delink_table)
             }
             
             modal_data['open_with_half_filled'] = True
 
-            # Set loaded_cases_qty to 0/effective_loaded
-            modal_data['loaded_cases_qty'] = f"0/{effective_loaded}"
+            # Set loaded_cases_qty to 0/jig_capacity for display (will update on scan)
+            modal_data['loaded_cases_qty'] = f"0/{modal_data['jig_capacity']}"
             modal_data['excess_message'] = f"{leftover_cases} cases are in excess"
         else:
             modal_data['open_with_half_filled'] = False
@@ -689,20 +704,16 @@ class JigAddModalDataView(TemplateView):
             else:
                 # No broken hooks - use existing trays with their quantities
                 existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('id')
-                no_of_full_trays = effective_loaded_cases // tray_capacity
-                partial_cases = effective_loaded_cases % tray_capacity
-                for idx in range(no_of_full_trays):
-                    if idx < len(existing_trays):
-                        tray = existing_trays[idx]
-                        model_bg = self._get_model_bg(idx + 1)
-                        tray_qty = tray_capacity
-                        delink_table.append({
-                            'tray_id': tray.tray_id,
-                            'tray_quantity': tray_qty,
-                            'model_bg': model_bg,
-                            'original_quantity': tray_qty,
-                            'excluded_quantity': 0,
-                        })
+                for idx, tray in enumerate(existing_trays):
+                    model_bg = self._get_model_bg(idx + 1)
+                    tray_qty = tray.tray_quantity or tray_capacity
+                    delink_table.append({
+                        'tray_id': '',
+                        'tray_quantity': tray_qty,
+                        'model_bg': model_bg,
+                        'original_quantity': tray_qty,
+                        'excluded_quantity': 0,
+                    })
             
             logger.info(f"📊 DELINK TABLE: {len(delink_table)} trays for scanning (effective_cases={effective_loaded_cases}, broken_hooks={broken_hooks})")
             return delink_table
@@ -1476,13 +1487,7 @@ class JigSubmitAPIView(APIView):
         partial_lot_id = None
         effective_lot_qty = None
         
-        # Handle combined lot IDs from Add Model functionality
-        combined_lot_ids = data.get('combined_lot_ids', [])
-        is_multi_model = len(combined_lot_ids) > 1
-        
         logger.info(f"🚀 SUBMIT REQUEST: batch_id={batch_id}, lot_id={lot_id}, jig_qr_id={jig_qr_id}, user={user.username}")
-        if combined_lot_ids:
-            logger.info(f"🔀 MULTI-MODEL: Combined lot IDs: {combined_lot_ids}")
 
         # Basic validation
         if not batch_id or not lot_id or not jig_qr_id:
@@ -1571,19 +1576,6 @@ class JigSubmitAPIView(APIView):
                 return Response({'success': False, 'message': f"Tray capacity not configured for tray type '{getattr(batch, 'tray_type', None)}'. Please configure in admin."}, status=status.HTTP_400_BAD_REQUEST)
             
             logger.info(f"📊 Tray capacity: {tray_capacity} (type: {type(tray_capacity)})")
-
-            # Move partial tray from delink to half_filled if original_lot_qty > jig_capacity
-            if original_lot_qty > jig_capacity:
-                partial_tray = None
-                for tray in delink_tray_info:
-                    if tray['cases'] < tray_capacity:
-                        partial_tray = tray
-                        break
-                if partial_tray:
-                    half_filled_tray_info.append(partial_tray)
-                    delink_tray_info.remove(partial_tray)
-                    updated_lot_qty -= partial_tray['cases']
-                    logger.info(f"🔄 Moved partial tray {partial_tray} from delink to half_filled")
 
             # Implement new logic: Compare original_lot_qty and jig_capacity
             if original_lot_qty == jig_capacity:
@@ -1749,17 +1741,10 @@ class JigSubmitAPIView(APIView):
                     stock.save()
                     print(f"After update: stock.total_stock = {stock.total_stock}, new lot_id = {stock.lot_id}")
                     
-                    # Create JigLoadTrayId records for the excess trays with new lot_id
-                    for tray in complete_half_filled_tray_info:
-                        JigLoadTrayId.objects.create(
-                            lot_id=partial_lot_id,
-                            tray_id=tray['tray_id'],
-                            tray_quantity=tray['cases'],
-                            batch_id=batch,
-                            user=user,
-                            # Set other fields as needed
-                        )
-                    print(f"Created {len(complete_half_filled_tray_info)} trays for partial lot {partial_lot_id}")
+                    # Update JigLoadTrayId records with new lot_id for remaining trays (optimized bulk update)
+                    remaining_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch, broken_hooks_effective_tray=False)
+                    updated_count = remaining_trays.update(lot_id=partial_lot_id)
+                    print(f"Updated {updated_count} remaining trays with new lot_id: {partial_lot_id}")
                     
                     # Log the split operation
                     logger.info(f"✅ LOT SPLIT: original_lot_id={lot_id} -> completed_qty={jig_capacity}, remaining_lot_id={partial_lot_id} -> remaining_qty={remaining_qty}")
@@ -1787,30 +1772,6 @@ class JigSubmitAPIView(APIView):
                 # Get plating stock number
                 plating_stock_num = batch.plating_stk_no if batch.plating_stk_no else (batch.model_stock_no.plating_stk_no if batch.model_stock_no else '')
 
-                # Prepare model cases data for multi-model submissions
-                model_cases_data = ''
-                if is_multi_model and combined_lot_ids:
-                    # Build comma-separated model numbers with quantities
-                    model_cases_list = []
-                    for combined_lot in combined_lot_ids:
-                        try:
-                            # Get stock for this lot ID
-                            combined_stock = TotalStockModel.objects.filter(lot_id=combined_lot).select_related('batch_id').first()
-                            if combined_stock and combined_stock.batch_id:
-                                model_no = combined_stock.batch_id.plating_stk_no or ''
-                                # Get quantity for this lot from delink_tray_info
-                                lot_qty = sum(tray['cases'] for tray in complete_delink_tray_info 
-                                            if tray.get('lot_id') == combined_lot)
-                                if not lot_qty:
-                                    # If not found in delink info, use total stock
-                                    lot_qty = combined_stock.total_stock or 0
-                                model_cases_list.append(f"{model_no}:{lot_qty}")
-                                logger.info(f"  📦 Model {model_no}: {lot_qty} cases from lot {combined_lot}")
-                        except Exception as e:
-                            logger.warning(f"  ⚠️ Could not get data for combined lot {combined_lot}: {e}")
-                    model_cases_data = ','.join(model_cases_list)
-                    logger.info(f"🔀 MULTI-MODEL data: {model_cases_data}")
-
                 # Create JigCompleted entry
                 JigCompleted.objects.create(
                     batch_id=batch_id,
@@ -1830,14 +1791,11 @@ class JigSubmitAPIView(APIView):
                     loaded_cases_qty=effective_lot_qty,
                     plating_stock_num=plating_stock_num,
                     draft_status='submitted',
-                    hold_status='normal',
-                    is_multi_model=is_multi_model,
-                    no_of_model_cases=model_cases_data if is_multi_model else '',
+                    hold_status='normal',  # Added missing field
+                    is_multi_model=data.get('is_multi_model', False),  # Added missing field
                     partial_lot_id=partial_lot_id  # Store new lot ID for remaining cases
                 )
                 logger.info(f"✅ JigCompleted record created for lot_id={lot_id} with effective_qty={effective_lot_qty}")
-                if is_multi_model:
-                    logger.info(f"✅ Multi-model jig: {len(combined_lot_ids)} lots combined")
 
                 # Update Jig only after successful JigCompleted creation
                 jig.is_loaded = True
@@ -2087,14 +2045,6 @@ class JigCompletedTable(TemplateView):
                 continue
         
         context['jig_details'] = completed_data
-        
-        # Pagination: 10 rows per page
-        paginator = Paginator(completed_data, 10)
-        page_number = self.request.GET.get('page')
-        page_obj = paginator.get_page(page_number)
-        context['page_obj'] = page_obj
-        context['jig_details'] = page_obj.object_list
-        
         return context
 
 

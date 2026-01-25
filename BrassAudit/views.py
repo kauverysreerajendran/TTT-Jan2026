@@ -31,6 +31,9 @@ from Jig_Loading.models import *
 from django.utils import timezone
 from django.contrib.auth.decorators import login_required
 
+# Import the reverse transfer function from Brass QC
+from Brass_QC.views import send_brass_audit_back_to_brass_qc
+
  
 
 
@@ -1191,10 +1194,26 @@ class BAuditBatchRejectionAPIView(APIView):
 
             # Transfer batch-level audit rejection to Brass QC for pick/tray-scan visibility
             try:
-                transfer_brass_audit_rejections_to_brass_qc(lot_id, request.user, batch_rejection=True, lot_comment=lot_rejected_comment)
+                # ✅ IMPROVED: Use the new reverse transfer function that reuses existing trays
+                # Call the new reverse transfer function that prevents duplication
+                reverse_transfer_success = send_brass_audit_back_to_brass_qc(lot_id, request.user)
+                
+                if reverse_transfer_success:
+                    print(f"✅ [BAuditBatchRejectionAPIView] Successfully sent lot {lot_id} back to Brass QC using reverse transfer")
+                    
+                    # Also set the flag to ensure it appears in Brass QC pick table
+                    total_stock.send_brass_audit_to_qc = True
+                    total_stock.save(update_fields=['send_brass_audit_to_qc'])
+                else:
+                    print(f"⚠️ [BAuditBatchRejectionAPIView] Reverse transfer failed, falling back to original transfer method")
+                    # Fallback to the original transfer method if needed
+                    transfer_brass_audit_rejections_to_brass_qc(lot_id, request.user, batch_rejection=True, lot_comment=lot_rejected_comment)
+                    
             except Exception as e:
                 print(f"⚠️ [BAuditBatchRejectionAPIView] Failed to transfer batch rejection to Brass QC: {e}")
                 traceback.print_exc()
+                # Fallback to original method
+                transfer_brass_audit_rejections_to_brass_qc(lot_id, request.user, batch_rejection=True, lot_comment=lot_rejected_comment)
             
             # Set send_brass_qc=True to send accepted trays back to Brass QC
             total_stock.send_brass_qc = True
@@ -1225,22 +1244,27 @@ class BAuditBatchRejectionAPIView(APIView):
             )
             print(f"✅ Created new TotalStockModel for next process: {new_lot_id}")
 
-                        # ✅ Fetch accepted trays (rejected_tray=False) for the selected lot_id
-            rejected_trays = BrassAuditTrayId.objects.filter(lot_id=lot_id, rejected_tray=True)
+                        # ✅ FIX BUG 2: Create BrassTrayId records for the new lot (not BrassAuditTrayId)
+            # Get all original trays from the rejected lot
+            from Brass_QC.models import BrassTrayId
+            original_trays = BrassTrayId.objects.filter(lot_id=lot_id)
 
-            # ✅ Create new BrassAuditTrayId for each accepted tray, but with new_lot_id
-            for tray in rejected_trays:
-                BrassAuditTrayId.objects.create(
+            # Create BrassTrayId records for the new lot to enable proper tray scanning in Brass QC
+            for tray in original_trays:
+                BrassTrayId.objects.create(
                     tray_id=tray.tray_id,
                     lot_id=new_lot_id,
                     batch_id=tray.batch_id,
                     tray_quantity=tray.tray_quantity,
                     tray_capacity=tray.tray_capacity,
                     tray_type=tray.tray_type,
-                    rejected_tray=True,
+                    top_tray=tray.top_tray,
+                    rejected_tray=False,  # Reset rejection flag for new lot
+                    delink_tray=False,
                     IP_tray_verified=True,
-                    new_tray=False
-                    # add other fields as needed
+                    new_tray=False,
+                    user=request.user,
+                    date=timezone.now()
                 )
 
             return Response({'success': True, 'message': 'Batch rejection saved with remarks.'})

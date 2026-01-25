@@ -265,7 +265,98 @@ def transfer_brass_qc_data_to_brass_audit(lot_id, user):
         traceback.print_exc()
         return False
 
- 
+
+# ✅ NEW: Helper function to send Brass Audit rejected data back to Brass QC (reuse existing trays)
+def send_brass_audit_back_to_brass_qc(lot_id, user):
+    """
+    When a lot is rejected in Brass Audit and sent back to Brass QC:
+    - Do NOT create new BrassTrayId records (reuse existing ones).
+    - Update flags to enable the lot in Brass QC.
+    - Clear Brass Audit data to prevent duplication.
+    - Automatically recalculate top tray for Brass QC.
+    """
+    try:
+        print(f"🔄 [REVERSE TRANSFER] Sending Brass Audit lot {lot_id} back to Brass QC (reuse existing trays)")
+        
+        # Get the TotalStockModel entry
+        stock = TotalStockModel.objects.filter(lot_id=lot_id).first()
+        if not stock:
+            print(f"❌ [REVERSE TRANSFER] Lot {lot_id} not found in TotalStockModel")
+            return False
+        
+        # ✅ STEP 1: Clear Brass Audit data (to prevent duplication)
+        # Delete Brass Audit tray records for this lot
+        from BrassAudit.models import BrassAuditTrayId, Brass_Audit_Accepted_TrayID_Store, Brass_Audit_Rejected_TrayScan
+        deleted_audit_trays = BrassAuditTrayId.objects.filter(lot_id=lot_id).delete()
+        deleted_accepted_store = Brass_Audit_Accepted_TrayID_Store.objects.filter(lot_id=lot_id).delete()
+        deleted_rejected_scans = Brass_Audit_Rejected_TrayScan.objects.filter(lot_id=lot_id).delete()
+        print(f"🗑️ [REVERSE TRANSFER] Cleared Brass Audit data for lot {lot_id}: {deleted_audit_trays[0]} trays, {deleted_accepted_store[0]} accepted, {deleted_rejected_scans[0]} rejected scans")
+        
+        # ✅ STEP 2: Update flags to enable in Brass QC (reuse existing state)
+        stock.send_brass_audit_to_qc = True   # ✅ FIX BUG 1: Set this to True so lot appears in Brass QC pick table
+        stock.brass_audit_rejection = False   # Reset rejection flag so lot can appear in Brass QC
+        stock.brass_audit_accptance = False   # Reset acceptance (prevents appearance in Brass Audit)
+        stock.brass_qc_accptance = False      # ✅ FIX BUG 1: Reset this to prevent Brass Audit inclusion
+        stock.brass_audit_few_cases_accptance = False
+        stock.brass_audit_rejection_tray_scan_status = False
+        stock.brass_audit_accepted_tray_scan_status = False
+        stock.brass_audit_onhold_picking = False
+        stock.brass_audit_draft = False
+        stock.save(update_fields=[
+            'send_brass_audit_to_qc', 'brass_audit_rejection', 'brass_audit_accptance', 'brass_qc_accptance',
+            'brass_audit_few_cases_accptance', 'brass_audit_rejection_tray_scan_status',
+            'brass_audit_accepted_tray_scan_status', 'brass_audit_onhold_picking', 'brass_audit_draft'
+        ])
+        print(f"✅ [REVERSE TRANSFER] Updated flags for lot {lot_id} to enable in Brass QC")
+        
+        # ✅ STEP 3: Ensure existing BrassTrayId records are available (no new creation)
+        # Reset any flags on existing trays to make them available for Brass QC
+        brass_trays = BrassTrayId.objects.filter(lot_id=lot_id)
+        if brass_trays.exists():
+            # Reset flags to make trays available for processing again
+            brass_trays.update(
+                rejected_tray=False,  # Reset rejection flag
+                delink_tray=False     # Ensure not marked as delinked
+            )
+            print(f"🔄 [REVERSE TRANSFER] Reused {brass_trays.count()} existing BrassTrayId records for lot {lot_id}")
+            
+            # Debug: Show tray details
+            for tray in brass_trays:
+                print(f"   📦 Reused tray: {tray.tray_id} (qty={tray.tray_quantity}, top_tray={tray.top_tray})")
+        else:
+            print(f"⚠️ [REVERSE TRANSFER] No existing BrassTrayId records found for lot {lot_id} (this might be an issue)")
+        
+        # ✅ STEP 4: Reset TrayId table flags to enable processing
+        from modelmasterapp.models import TrayId
+        tray_ids_in_lot = brass_trays.values_list('tray_id', flat=True)
+        if tray_ids_in_lot:
+            updated_tray_count = TrayId.objects.filter(
+                lot_id=lot_id,
+                tray_id__in=tray_ids_in_lot
+            ).update(
+                brass_rejected_tray=False,  # Reset rejection flag
+                rejected_tray=False         # Ensure not marked as rejected
+            )
+            print(f"✅ [REVERSE TRANSFER] Reset {updated_tray_count} TrayId records for Brass QC processing")
+        
+        # ✅ STEP 5: Clear any Brass QC accepted data that might interfere
+        # Clear any lingering accepted data to start fresh
+        Brass_Qc_Accepted_TrayID_Store.objects.filter(lot_id=lot_id).delete()
+        Brass_Qc_Accepted_TrayScan.objects.filter(lot_id=lot_id).delete()
+        print(f"🗑️ [REVERSE TRANSFER] Cleared any lingering Brass QC accepted data for lot {lot_id}")
+        
+        # ✅ STEP 6: Automatically recalculate top tray for Brass QC
+        auto_calculate_top_tray(lot_id)
+        print(f"✅ [REVERSE TRANSFER] Automatically recalculated top tray for Brass QC lot {lot_id}")
+        
+        print(f"✅ [REVERSE TRANSFER] Successfully sent lot {lot_id} back to Brass QC (reused existing trays)")
+        return True
+        
+    except Exception as e:
+        print(f"❌ [REVERSE TRANSFER] Error sending back to Brass QC: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 @method_decorator(login_required, name='dispatch')
@@ -3995,6 +4086,22 @@ def brass_view_tray_list(request):
                     print(f"   ✅ Added tray {tray_id} (qty: {tray_obj.tray_quantity})")
                 else:
                     print(f"   ⚠️ Skipped duplicate tray {tray_id} (occurrence #{seen_tray_count[tray_id]})")
+            
+            # ✅ FIXED: If no BrassTrayId records found, fallback to Brass_Qc_Accepted_TrayID_Store
+            if not tray_list:
+                print(f"⚠️ [brass_view_tray_list] No BrassTrayId records found, checking Brass_Qc_Accepted_TrayID_Store")
+                accepted_trays = Brass_Qc_Accepted_TrayID_Store.objects.filter(lot_id=lot_id).order_by('id')
+                print(f"✅ [brass_view_tray_list] Found {accepted_trays.count()} Brass_Qc_Accepted_TrayID_Store records for lot {lot_id}")
+                for idx, tray_obj in enumerate(accepted_trays):
+                    tray_id = tray_obj.tray_id
+                    if tray_id and tray_id not in added_tray_ids:
+                        tray_list.append({
+                            'sno': rejected_count + len(added_tray_ids) + 1,
+                            'tray_id': tray_id,
+                            'tray_qty': tray_obj.tray_qty,
+                        })
+                        added_tray_ids.add(tray_id)
+                        print(f"   ✅ Added tray from Brass_Qc_Accepted_TrayID_Store {tray_id} (qty: {tray_obj.tray_qty})")
             
             print(f"✅ [brass_view_tray_list] Returned {len(tray_list)} unique trays for brass_qc_accptance")
             print(f"   Duplicate summary: {seen_tray_count}")

@@ -259,6 +259,7 @@ class InprocessInspectionView(TemplateView):
         print(f"   ❌ No lot_ids found, returning empty list")
         return []
 
+    # FIRST INSTANCE - InprocessInspectionView
     def process_model_cases_corrected(self, no_of_model_cases, lot_ids):
         """
         Process model_cases using the SAME batch_ids from lot_ids
@@ -340,7 +341,7 @@ class InprocessInspectionView(TemplateView):
         if model_batch_ids:
             model_masters = ModelMasterCreation.objects.filter(
                 id__in=model_batch_ids
-            ).select_related('version', 'model_stock_no')
+            ).select_related('version', 'model_stock_no', 'plating_color', 'polish_finish', 'tray_type')
             
             print(f"   🏭 Found {len(model_masters)} ModelMasterCreation records")
             
@@ -350,6 +351,9 @@ class InprocessInspectionView(TemplateView):
                 print(f"         plating_stk_no: {model.plating_stk_no}")
                 print(f"         polishing_stk_no: {model.polishing_stk_no}")
                 print(f"         version_internal: {getattr(model.version, 'version_internal', None) if model.version else 'None'}")
+                print(f"         plating_color: {getattr(model.plating_color, 'plating_color', None) if model.plating_color else 'None'}")
+                print(f"         polish_finish: {getattr(model.polish_finish, 'polish_finish', None) if model.polish_finish else 'None'}")
+                print(f"         tray_type: {getattr(model.tray_type, 'tray_type', None) if model.tray_type else 'None'}")
         
         # Fetch from RecoveryMasterCreation
         if recovery_batch_ids:
@@ -380,6 +384,7 @@ class InprocessInspectionView(TemplateView):
         plating_stk_nos = []
         polishing_stk_nos = []
         version_names = []
+        models_data = []
         
         for lot_id in lot_ids:
             batch_id = lot_to_batch.get(lot_id)
@@ -398,12 +403,30 @@ class InprocessInspectionView(TemplateView):
                 polishing_stk_nos.append(polishing_value)
                 version_names.append(version_value)
                 
+                # Build models_data for plating_color, polish_finish, tray info
+                model_data = {
+                    'model_name': getattr(master, 'model_no', None) or getattr(getattr(master, 'model_stock_no', None), 'model_no', None) or "N/A",
+                    'plating_color': getattr(getattr(master, 'plating_color', None), 'plating_color', None) or "No Plating Color",
+                    'polish_finish': getattr(getattr(master, 'polish_finish', None), 'polish_finish', None) or "N/A",
+                    'tray_type': getattr(getattr(master, 'tray_type', None), 'tray_type', None) or "No Tray Type",
+                    'tray_capacity': getattr(master, 'tray_capacity', None) or self.get_dynamic_tray_capacity(getattr(getattr(master, 'tray_type', None), 'tray_type', "No Tray Type"))
+                }
+                models_data.append(model_data)
+                
                 print(f"   🔄 lot_id: {lot_id} -> batch_id: {batch_id}")
                 print(f"      ✅ Data: plating={plating_value}, polishing={polishing_value}, version={version_value}")
+                print(f"      ✅ Model: name={model_data['model_name']}, color={model_data['plating_color']}, finish={model_data['polish_finish']}, tray={model_data['tray_type']}-{model_data['tray_capacity']}")
             else:
                 plating_stk_nos.append("No Plating Stock No")
                 polishing_stk_nos.append("No Polishing Stock No")
                 version_names.append("No Version")
+                models_data.append({
+                    'model_name': "N/A",
+                    'plating_color': "No Plating Color",
+                    'polish_finish': "N/A",
+                    'tray_type': "No Tray Type",
+                    'tray_capacity': 0
+                })
                 print(f"   ❌ No data found for lot_id: {lot_id}")
         
         result = {
@@ -412,13 +435,15 @@ class InprocessInspectionView(TemplateView):
             'model_version_names': ', '.join(version_names),
             'model_plating_stk_nos_list': plating_stk_nos,
             'model_polishing_stk_nos_list': polishing_stk_nos,
-            'model_version_names_list': version_names
+            'model_version_names_list': version_names,
+            'models_data': models_data
         }
         
         print(f"   🎉 process_model_cases_corrected FINAL RESULT:")
         print(f"      model_plating_stk_nos: '{result['model_plating_stk_nos']}'")
         print(f"      model_polishing_stk_nos: '{result['model_polishing_stk_nos']}'")
         print(f"      model_version_names: '{result['model_version_names']}'")
+        print(f"      models_data: {result['models_data']}")
         
         return result
     
@@ -646,13 +671,25 @@ class InprocessInspectionView(TemplateView):
         jig_detail.model_polishing_stk_nos_list = model_cases_data['model_polishing_stk_nos_list']
         jig_detail.model_version_names_list = model_cases_data['model_version_names_list']
         
-        # Set model_presents and plating_color from models_data
+        # Set model_presents and plating_color from models_data or draft_data
         models_data = model_cases_data.get('models_data', [])
+        draft_data = jig_detail.draft_data or {}
+        
         if models_data:
             jig_detail.model_presents = ", ".join([m.get('model_name', '') for m in models_data])
             jig_detail.plating_color = models_data[0].get('plating_color', 'No Plating Color') if models_data else 'No Plating Color'
+            jig_detail.polish_finish = models_data[0].get('polish_finish', 'N/A') if models_data else 'N/A'
             jig_detail.no_of_model_cases = [m.get('model_name', '') for m in models_data]  # For circles display
         else:
+            # Parse from draft_data if models_data is empty
+            plating_color = draft_data.get('nickel_bath_type', 'No Plating Color')
+            polish_finish = draft_data.get('polish_finish', 'N/A')
+            model_presents = draft_data.get('model_no', 'N/A')
+            
+            jig_detail.model_presents = model_presents
+            jig_detail.plating_color = plating_color
+            jig_detail.polish_finish = polish_finish
+            jig_detail.no_of_model_cases = [model_presents] if model_presents != 'N/A' else []
             # If no models_data, try to extract from original no_of_model_cases (from draft_data)
             jig_detail.model_presents = "No Model Info"
             jig_detail.plating_color = "No Plating Color"
@@ -697,15 +734,19 @@ class InprocessInspectionView(TemplateView):
             else:
                 jig_detail.tray_capacity = 0
         
-        # Fallback: Fetch plating_color from TotalStockModel if not set and models_data is empty
-        if not models_data and jig_detail.plating_color == 'No Plating Color':
+        # Fallback: Fetch plating_color and polish_finish from TotalStockModel if not set and models_data is empty
+        if not models_data and (jig_detail.plating_color == 'No Plating Color' or jig_detail.polish_finish == 'N/A'):
             try:
                 tsm = TotalStockModel.objects.filter(lot_id=jig_detail.lot_id).first()
-                if tsm and tsm.plating_color:
-                    jig_detail.plating_color = tsm.plating_color.plating_color
-                    print(f"   🔄 Plating color fallback from TotalStockModel: {jig_detail.plating_color}")
+                if tsm:
+                    if tsm.plating_color and jig_detail.plating_color == 'No Plating Color':
+                        jig_detail.plating_color = tsm.plating_color.plating_color
+                        print(f"   🔄 Plating color fallback from TotalStockModel: {jig_detail.plating_color}")
+                    if tsm.polish_finish and jig_detail.polish_finish == 'N/A':
+                        jig_detail.polish_finish = tsm.polish_finish.polish_finish
+                        print(f"   🔄 Polish finish fallback from TotalStockModel: {jig_detail.polish_finish}")
             except Exception as e:
-                print(f"   ⚠️ Error fetching plating_color from TotalStockModel: {e}")
+                print(f"   ⚠️ Error fetching plating_color/polish_finish from TotalStockModel: {e}")
         
         # Fallback: Fetch tray info from TotalStockModel if not set
         if not jig_detail.tray_type or jig_detail.tray_type == 'No Tray Type':
@@ -1918,6 +1959,7 @@ class InprocessInspectionCompleteView(TemplateView):
         
         return result
 
+    # SECOND INSTANCE - Another class
     def process_model_cases_corrected(self, no_of_model_cases, lot_ids):
         """
         Process model_cases using the SAME batch_ids from lot_ids
@@ -1999,7 +2041,7 @@ class InprocessInspectionCompleteView(TemplateView):
         if model_batch_ids:
             model_masters = ModelMasterCreation.objects.filter(
                 id__in=model_batch_ids
-            ).select_related('version', 'model_stock_no')
+            ).select_related('version', 'model_stock_no', 'plating_color', 'polish_finish', 'tray_type')
             
             print(f"   🏭 Found {len(model_masters)} ModelMasterCreation records")
             
@@ -2009,6 +2051,9 @@ class InprocessInspectionCompleteView(TemplateView):
                 print(f"         plating_stk_no: {model.plating_stk_no}")
                 print(f"         polishing_stk_no: {model.polishing_stk_no}")
                 print(f"         version_internal: {getattr(model.version, 'version_internal', None) if model.version else 'None'}")
+                print(f"         plating_color: {getattr(model.plating_color, 'plating_color', None) if model.plating_color else 'None'}")
+                print(f"         polish_finish: {getattr(model.polish_finish, 'polish_finish', None) if model.polish_finish else 'None'}")
+                print(f"         tray_type: {getattr(model.tray_type, 'tray_type', None) if model.tray_type else 'None'}")
         
         # Fetch from RecoveryMasterCreation
         if recovery_batch_ids:
@@ -2039,6 +2084,7 @@ class InprocessInspectionCompleteView(TemplateView):
         plating_stk_nos = []
         polishing_stk_nos = []
         version_names = []
+        models_data = []
         
         for lot_id in lot_ids:
             batch_id = lot_to_batch.get(lot_id)
@@ -2057,12 +2103,30 @@ class InprocessInspectionCompleteView(TemplateView):
                 polishing_stk_nos.append(polishing_value)
                 version_names.append(version_value)
                 
+                # Build models_data for plating_color, polish_finish, tray info
+                model_data = {
+                    'model_name': getattr(master, 'model_no', None) or getattr(getattr(master, 'model_stock_no', None), 'model_no', None) or "N/A",
+                    'plating_color': getattr(getattr(master, 'plating_color', None), 'plating_color', None) or "No Plating Color",
+                    'polish_finish': getattr(getattr(master, 'polish_finish', None), 'polish_finish', None) or "N/A",
+                    'tray_type': getattr(getattr(master, 'tray_type', None), 'tray_type', None) or "No Tray Type",
+                    'tray_capacity': getattr(master, 'tray_capacity', None) or self.get_dynamic_tray_capacity(getattr(getattr(master, 'tray_type', None), 'tray_type', "No Tray Type"))
+                }
+                models_data.append(model_data)
+                
                 print(f"   🔄 lot_id: {lot_id} -> batch_id: {batch_id}")
                 print(f"      ✅ Data: plating={plating_value}, polishing={polishing_value}, version={version_value}")
+                print(f"      ✅ Model: name={model_data['model_name']}, color={model_data['plating_color']}, finish={model_data['polish_finish']}, tray={model_data['tray_type']}-{model_data['tray_capacity']}")
             else:
                 plating_stk_nos.append("No Plating Stock No")
                 polishing_stk_nos.append("No Polishing Stock No")
                 version_names.append("No Version")
+                models_data.append({
+                    'model_name': "N/A",
+                    'plating_color': "No Plating Color",
+                    'polish_finish': "N/A",
+                    'tray_type': "No Tray Type",
+                    'tray_capacity': 0
+                })
                 print(f"   ❌ No data found for lot_id: {lot_id}")
         
         result = {
@@ -2071,13 +2135,15 @@ class InprocessInspectionCompleteView(TemplateView):
             'model_version_names': ', '.join(version_names),
             'model_plating_stk_nos_list': plating_stk_nos,
             'model_polishing_stk_nos_list': polishing_stk_nos,
-            'model_version_names_list': version_names
+            'model_version_names_list': version_names,
+            'models_data': models_data
         }
         
         print(f"   🎉 process_model_cases_corrected FINAL RESULT:")
         print(f"      model_plating_stk_nos: '{result['model_plating_stk_nos']}'")
         print(f"      model_polishing_stk_nos: '{result['model_polishing_stk_nos']}'")
         print(f"      model_version_names: '{result['model_version_names']}'")
+        print(f"      models_data: {result['models_data']}")
         
         return result
 
@@ -2330,7 +2396,7 @@ class InprocessInspectionCompleteView(TemplateView):
                 version_name = getattr(model_master.version, 'version_name', None) or getattr(model_master.version, 'version_internal', 'No Version')
             
             # Fetch plating_color from TotalStockModel (total stock model)
-            plating_color = "No Plating Color"
+            plating_color = ""
             try:
                 tsm = TotalStockModel.objects.filter(batch_id=model_master.id).first()
                 if tsm and tsm.plating_color:
@@ -2339,7 +2405,7 @@ class InprocessInspectionCompleteView(TemplateView):
                 print(f"⚠️ Error fetching plating_color from TotalStockModel: {e}")
             
             # Fetch tray info from ModelMaster
-            tray_type = "No Tray Type"
+            tray_type = ""
             if model_master.model_stock_no and model_master.model_stock_no.tray_type:
                 tray_type = model_master.model_stock_no.tray_type.tray_type
             
@@ -2348,7 +2414,7 @@ class InprocessInspectionCompleteView(TemplateView):
                 'model_no': model_master.model_stock_no.model_no if model_master.model_stock_no else None,
                 'version_name': version_name,
                 'plating_color': plating_color,
-                'polish_finish': getattr(model_master, 'polish_finish', None) or "No Polish Finish",
+                'polish_finish': getattr(model_master, 'polish_finish', None) or "",
                 'plating_stk_no': getattr(model_master, 'plating_stk_no', None) or "No Plating Stock No",
                 'polishing_stk_no': getattr(model_master, 'polishing_stk_no', None) or "No Polishing Stock No",
                 'location_name': model_master.location.location_name if hasattr(model_master, 'location') and model_master.location else "No Location",
@@ -2394,12 +2460,12 @@ class InprocessInspectionCompleteView(TemplateView):
             'batch_id': None,
             'model_no': None,
             'version_name': "No Version",
-            'plating_color': "No Plating Color",
-            'polish_finish': "No Polish Finish",
+            'plating_color': "",
+            'polish_finish': "",
             'plating_stk_no': "No Plating Stock No",
             'polishing_stk_no': "No Polishing Stock No",
             'location_name': "No Location",
-            'tray_type': "No Tray Type",
+            'tray_type': "",
             'tray_capacity': 0,
             'vendor_internal': "No Vendor",
             'calculated_no_of_trays': 0,

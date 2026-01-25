@@ -317,7 +317,7 @@ html.pick-table-only {
 .table-responsive {
   min-height: 0 !important;
   /* max-height: 430px !important; */
-  max-height: 375px;
+  max-height: 450px;
   height: auto !important;
   margin-bottom: 0 !important;
   box-sizing: border-box !important;
