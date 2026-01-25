@@ -64,14 +64,194 @@ class IndexView(APIView):
  
     def get(self, request, format=None):
         # Get current date and format it
+        from django.utils import timezone
+        import datetime
+        
+        allowed_modules = get_allowed_modules_for_user(request.user)
+        dashboard_stats = self.get_dashboard_stats(allowed_modules)
+        
         context = { 
             'user': request.user,
-            'allowed_modules': get_allowed_modules_for_user(request.user),
+            'allowed_modules': allowed_modules,
+            'dashboard_stats': dashboard_stats,
+            'current_date': timezone.now().strftime('%d %b %Y'),
         }
         response = Response(context)
         response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response['Pragma'] = 'no-cache'
         return response
+    
+    def get_dashboard_stats(self, allowed_modules):
+        """Fetch statistics for each module dynamically"""
+        stats = []
+        
+        # Map of module name patterns to their data sources
+        module_patterns = {
+            'DP': {
+                'label': 'Day Planning',
+                'models': ['modelmasterapp.TrayId', 'modelmasterapp.DPTrayId_History'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#0b52bc'
+            },
+            'IS': {
+                'label': 'Input Screening',
+                'models': ['InputScreening.IPTrayId', 'InputScreening.IP_Accepted_TrayScan'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#29c17a'
+            },
+            'Brass QC': {
+                'label': 'Brass QC',
+                'models': ['Brass_QC.BrassTrayId', 'Brass_QC.Brass_Qc_Accepted_TrayScan'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#38c1dc'
+            },
+            'Brass Audit': {
+                'label': 'Brass Audit',
+                'models': ['BrassAudit.BrassAuditTrayId', 'BrassAudit.Brass_Audit_Accepted_TrayScan'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#cf8935'
+            },
+            'IQF': {
+                'label': 'IQF',
+                'models': ['IQF.IQFTrayId', 'IQF.IQF_Accepted_TrayScan'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#e74c3c'
+            },
+            'Jig': {
+                'label': 'Jig Loading',
+                'models': ['modelmasterapp.TrayId'],
+                'icon': 'mdi-package-variant-closed',
+                'color': '#9b59b6'
+            },
+        }
+        
+        for module_name in allowed_modules:
+            # Try to find a matching pattern
+            config = None
+            for pattern, pattern_config in module_patterns.items():
+                if pattern.lower() in module_name.lower():
+                    config = pattern_config
+                    break
+            
+            if not config:
+                # Create a default config
+                config = {
+                    'label': module_name,
+                    'models': ['modelmasterapp.TrayId'],
+                    'icon': 'mdi-package-variant-closed',
+                    'color': '#95a5a6'
+                }
+            
+            try:
+                from modelmasterapp.models import ModelMasterCreation
+                
+                # For Day Planning, count only active batches
+                if 'DP' in module_name.upper():
+                    # Total lots = total batches with Moved_to_D_Picker = True and hold_lot=False
+                    total_lots = ModelMasterCreation.objects.filter(
+                        Moved_to_D_Picker=True, 
+                        hold_lot=False
+                    ).count()
+                    
+                    # Yet to Start = Moved_to_D_Picker=True, hold_lot=False, Draft_Saved=False
+                    yet_to_start = ModelMasterCreation.objects.filter(
+                        Moved_to_D_Picker=True, 
+                        hold_lot=False,
+                        Draft_Saved=False
+                    ).count()
+                    
+                    # Drafted = Moved_to_D_Picker=True, hold_lot=False, Draft_Saved=True
+                    drafted = ModelMasterCreation.objects.filter(
+                        Moved_to_D_Picker=True,
+                        hold_lot=False,
+                        Draft_Saved=True
+                    ).count()
+                    
+                    # Processed/Released = Moved_to_D_Picker=True, hold_lot=False, release_lot=True
+                    processed = ModelMasterCreation.objects.filter(
+                        Moved_to_D_Picker=True,
+                        hold_lot=False,
+                        release_lot=True
+                    ).count()
+                    
+                    # In Progress = Moved_to_D_Picker=True, hold_lot=False, not released
+                    in_progress = total_lots - processed
+                    
+                else:
+                    # For other modules, use general active lots count
+                    total_lots = ModelMasterCreation.objects.filter(hold_lot=False).count()
+                    yet_to_start = 0
+                    drafted = 0
+                    processed = 0
+                    in_progress = total_lots
+                
+                # Calculate progress percentage
+                progress_percent = int((processed / max(total_lots, 1)) * 100) if total_lots > 0 else 0
+                yet_to_start_percent = int((yet_to_start / max(total_lots, 1)) * 100) if total_lots > 0 else 0
+                drafted_percent = int((drafted / max(total_lots, 1)) * 100) if total_lots > 0 else 0
+                in_progress_percent = int((in_progress / max(total_lots, 1)) * 100) if total_lots > 0 else 0
+                
+                stats.append({
+                    'module': module_name,
+                    'label': config['label'],
+                    'total_lot': total_lots,
+                    'yet_to_start': yet_to_start,
+                    'yet_to_start_percent': yet_to_start_percent,
+                    'drafted': drafted,
+                    'drafted_percent': drafted_percent,
+                    'processed': processed,
+                    'processed_percent': progress_percent,
+                    'in_progress': in_progress,
+                    'in_progress_percent': in_progress_percent,
+                    'progress': progress_percent,
+                    'completed_percent': progress_percent,
+                    'moved_to_next_percent': in_progress_percent,
+                    'color': config['color'],
+                    'icon': config['icon'],
+                })
+            except Exception as e:
+                print(f"Error getting stats for {module_name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        return stats
+    
+    def get_model_count(self, model_path):
+        """Dynamically get model count"""
+        try:
+            app, model = model_path.rsplit('.', 1)
+            if app == 'modelmasterapp':
+                from modelmasterapp import models as mm
+                return getattr(mm, model).objects.count()
+            elif app == 'InputScreening':
+                from InputScreening import models as ism
+                return getattr(ism, model).objects.count()
+            elif app == 'Brass_QC':
+                from Brass_QC import models as bqm
+                return getattr(bqm, model).objects.count()
+            elif app == 'BrassAudit':
+                from BrassAudit import models as bam
+                return getattr(bam, model).objects.count()
+            elif app == 'IQF':
+                from IQF import models as iqm
+                return getattr(iqm, model).objects.count()
+            return 0
+        except:
+            return 0
+    
+    def get_module_color(self, module_name):
+        """Return color code for each module"""
+        colors = {
+            'DayPlanning': '#0b52bc',
+            'InputScreening': '#29c17a',
+            'Brass_QC': '#38c1dc',
+            'BrassAudit': '#cf8935',
+            'IQF': '#e74c3c',
+            'Jig_Loading': '#9b59b6',
+            'Jig_Unloading': '#f39c12',
+        }
+        return colors.get(module_name, '#95a5a6')
     
 @method_decorator(login_required(login_url='login-api'), name='dispatch')
 class Visual_AidView(APIView):

@@ -945,6 +945,8 @@ class Brass_Audit_Accepted_form(APIView):
 
             total_stock_data.brass_audit_accepted_qty = physical_qty
             total_stock_data.send_brass_qc = False
+            total_stock_data.send_brass_audit_to_iqf = True
+            total_stock_data.total_stock = physical_qty
 
             # Update process modules
             total_stock_data.next_process_module = "Jig Loading"
