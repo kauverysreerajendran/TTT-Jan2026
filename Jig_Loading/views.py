@@ -502,7 +502,7 @@ class JigAddModalDataView(TemplateView):
             modal_data['half_filled_tray_cases'] = 0
 
         # Delink Table preparation (existing tray data)
-        modal_data['delink_table'] = self._prepare_existing_delink_table(lot_id, batch, modal_data['effective_loaded_cases'], tray_capacity, broken_hooks)
+        modal_data['delink_table'] = self._prepare_existing_delink_table(lot_id, batch, modal_data['effective_loaded_cases'], tray_capacity, broken_hooks, modal_data['jig_capacity'])
 
         # If lot qty >= jig capacity, force empty_hooks to 0 regardless of broken hooks
         if modal_data['loaded_cases_qty'] >= modal_data['jig_capacity']:
@@ -625,7 +625,7 @@ class JigAddModalDataView(TemplateView):
                 })
         return model_image_data
     
-    def _prepare_existing_delink_table(self, lot_id, batch, effective_loaded_cases, tray_capacity, broken_hooks):
+    def _prepare_existing_delink_table(self, lot_id, batch, effective_loaded_cases, tray_capacity, broken_hooks, jig_capacity=None):
         """
         Prepare delink table data for scanning.
         Logic: 
@@ -685,29 +685,43 @@ class JigAddModalDataView(TemplateView):
                         'excluded_quantity': tray_data['excluded_qty']
                     })
             else:
-                # No broken hooks - use existing trays with their quantities
-                existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('id')
-                no_of_full_trays = effective_loaded_cases // tray_capacity
-                partial_cases = effective_loaded_cases % tray_capacity
-                for idx in range(no_of_full_trays):
-                    if idx < len(existing_trays):
-                        tray = existing_trays[idx]
-                        model_bg = self._get_model_bg(idx + 1)
-                        tray_qty = tray_capacity
+                # No broken hooks - check if lot qty <= jig capacity (specific scenario fix)
+                if effective_loaded_cases <= jig_capacity and broken_hooks == 0:
+                    # For this scenario: show all existing trays fully without exclusions
+                    existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('id')
+                    for tray in existing_trays:
                         delink_table.append({
                             'tray_id': tray.tray_id,
-                            'tray_quantity': tray_qty,
-                            'model_bg': model_bg,
-                            'original_quantity': tray_qty,
+                            'tray_quantity': tray.tray_quantity,
+                            'model_bg': self._get_model_bg(len(delink_table) + 1),
+                            'original_quantity': tray.tray_quantity,
                             'excluded_quantity': 0,
                         })
+                    logger.info(f"📊 DELINK TABLE (FIXED SCENARIO): Showing all {len(delink_table)} existing trays fully for lot {lot_id}")
+                else:
+                    # Existing logic for other scenarios: distribute based on effective cases
+                    existing_trays = JigLoadTrayId.objects.filter(lot_id=lot_id, batch_id=batch).order_by('id')
+                    no_of_full_trays = effective_loaded_cases // tray_capacity
+                    partial_cases = effective_loaded_cases % tray_capacity
+                    for idx in range(no_of_full_trays):
+                        if idx < len(existing_trays):
+                            tray = existing_trays[idx]
+                            model_bg = self._get_model_bg(idx + 1)
+                            tray_qty = tray_capacity
+                            delink_table.append({
+                                'tray_id': tray.tray_id,
+                                'tray_quantity': tray_qty,
+                                'model_bg': model_bg,
+                                'original_quantity': tray_qty,
+                                'excluded_quantity': 0,
+                            })
             
             logger.info(f"📊 DELINK TABLE: {len(delink_table)} trays for scanning (effective_cases={effective_loaded_cases}, broken_hooks={broken_hooks})")
             return delink_table
         
         except Exception as e:
             logger.error(f"❌ Error in _prepare_existing_delink_table: {str(e)}")
-            logger.error(f"Parameters: lot_id={lot_id}, effective_loaded_cases={effective_loaded_cases}, tray_capacity={tray_capacity}, broken_hooks={broken_hooks}")
+            logger.error(f"Parameters: lot_id={lot_id}, effective_loaded_cases={effective_loaded_cases}, tray_capacity={tray_capacity}, broken_hooks={broken_hooks}, jig_capacity={jig_capacity}")
             return []
     
     

@@ -3568,7 +3568,7 @@ function renderDelinkTableFromData(delinkTable) {
         type="text" 
         id="tray-${index}"
         class="tray-id-input ${tray.model_bg || 'model-bg-1'}" 
-        placeholder="Scan Tray Id"
+        placeholder="Scan Tray ${index + 1} Id"
         data-row-index="${index}"
         data-batch-id="${window.currentModalContext?.batchId || ''}"
         data-lot-id="${window.currentModalContext?.lotId || ''}"
@@ -3615,7 +3615,7 @@ function renderHalfFilledTraySection(trayDistribution, brokenHooks = 0, halfFill
           <input 
             type="text" 
             class="tray-id-input model-bg-1" 
-            placeholder="Scan tray ID"
+            placeholder="Scan Half-Filled Tray ID"
             data-row-index="half-filled"
             data-tray-qty="${halfFilledTrayCases}"
             data-batch-id="${window.currentModalContext?.batchId || ''}"
@@ -4622,6 +4622,7 @@ let currentPlatingColor = '';
 let currentPolishFinish = '';
 let currentJigType = '';
 let previouslyCombinedRows = new Set();
+let combinedModels = [];
 
 // Add Model button click handler
 document.addEventListener('DOMContentLoaded', function() {
@@ -4747,6 +4748,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Enter Add Model Mode
 function enterAddModelMode(modelNumber, lotId, batchId, currentQty, jigCapacity, emptyHooks, trayType, trayCapacity, platingColor, polishFinish, jigType) {
+  // Initialize combinedModels if empty
+  if (combinedModels.length === 0) {
+    combinedModels = [{
+      modelNumber: modelNumber,
+      lotId: lotId,
+      batchId: batchId,
+      quantity: currentQty,
+      platingColor: platingColor || '',
+      polishFinish: polishFinish || '',
+      jigType: jigType || ''
+    }];
+  }
+  
   // Store current modal context
   currentModelNumber = modelNumber;
   currentLotId = lotId;
@@ -4927,26 +4941,14 @@ function filterAndHighlightCompatibleRows(modelNumber, lotId, batchId, trayType,
       reasons.push('no quantity');
     }
     
-    // Rule 3: Must have same jig type
-    if (rowJigType !== jigType) {
-      isCompatible = false;
-      reasons.push(`different jig type (${rowJigType} vs ${jigType})`);
-    }
-    
-    // Rule 4: Must have same plating color
-    if (rowPlatingColor !== platingColor) {
-      isCompatible = false;
-      reasons.push(`different plating color (${rowPlatingColor} vs ${platingColor})`);
-    }
-    
     // Rule 5: Must have same polish finish (skip for lookalikes or same base models)
     if (!(isLookalike || sameBaseModel) && rowPolishFinish !== polishFinish) {
       isCompatible = false;
       reasons.push(`different polish finish (${rowPolishFinish} vs ${polishFinish})`);
     }
     
-    // Rule 6: Model compatibility check
-    if (isCompatible) {
+    // Rule 6: Model compatibility check (only if plating color or polish finish differ)
+    if (isCompatible && (rowPlatingColor !== platingColor || rowPolishFinish !== polishFinish)) {
       const isCrossAllowed = isCrossModelAllowed(modelNumber, rowPlatingStockNo, platingColor, polishFinish);
       
       if (!sameBaseModel && !isCrossAllowed && !isLookalike) {
@@ -5224,19 +5226,28 @@ function confirmModelSelection(selectedModels, totalAddedQty) {
 function proceedWithCombination(selectedModels, newTotalQuantity, newEmptyHooks) {
   console.log(`📈 New totals: Loaded ${newTotalQuantity}/${currentJigCapacity}, Empty hooks: ${newEmptyHooks}`);
   
-  // Calculate actual current quantity from jig capacity minus empty hooks
-  const actualCurrentQty = currentJigCapacity - currentEmptyHooks;
+  // Add selected models to combinedModels
+  for (let selected of selectedModels) {
+    combinedModels.push({
+      modelNumber: selected.platingStkNo,
+      lotId: selected.lotId,
+      batchId: selected.batchId,
+      quantity: selected.qty,
+      platingColor: selected.platingColor,
+      polishFinish: selected.polishFinish,
+      jigType: selected.jigType
+    });
+  }
   
-  // Combine current model with selected models
-  const allModels = [{
-    platingStockNo: currentModelNumber,
-    lotId: currentLotId,
-    batchId: currentBatchId,
-    qty: actualCurrentQty
-  }, ...selectedModels];
+  // Recalculate totals
+  const totalQuantity = combinedModels.reduce((sum, m) => sum + m.quantity, 0);
+  const emptyHooks = Math.max(0, currentJigCapacity - totalQuantity);
   
   // Update modal with combined data
-  updateModalWithCombinedModels(allModels, newTotalQuantity, newEmptyHooks);
+  updateModalWithCombinedModels(combinedModels, totalQuantity, emptyHooks);
+  
+  // Update previouslyCombinedRows
+  previouslyCombinedRows = new Set(combinedModels.map(m => m.lotId));
   
   // Exit Add Model mode
   exitAddModelMode();
@@ -5265,6 +5276,14 @@ function proceedWithCombination(selectedModels, newTotalQuantity, newEmptyHooks)
 function updateModalWithCombinedModels(allModels, newTotalQuantity, newEmptyHooks) {
   console.log('🔄 Updating modal with', allModels.length, 'models');
   
+  // Map combinedModels to expected format
+  let mappedModels = allModels.map(m => ({
+    platingStockNo: m.modelNumber,
+    lotId: m.lotId,
+    batchId: m.batchId,
+    qty: m.quantity
+  }));
+  
   const modal = document.getElementById('jigAddModal');
   if (!modal) {
     console.error('❌ Modal not found');
@@ -5284,15 +5303,15 @@ function updateModalWithCombinedModels(allModels, newTotalQuantity, newEmptyHook
   }
   
   // Create/Update model tabs in modal header
-  createModelTabs(allModels);
+  createModelTabs(mappedModels);
   
   // Recalculate tray distribution for all models
-  recalculateTrayDistributionForAllModels(allModels);
+  recalculateTrayDistributionForAllModels(mappedModels);
   
   // Store combined lot IDs in modal for backend submission
-  const combinedLotIds = allModels.map(m => m.lotId);
+  const combinedLotIds = mappedModels.map(m => m.lotId);
   modal.setAttribute('data-combined-lot-ids', JSON.stringify(combinedLotIds));
-  modal.setAttribute('data-is-multi-model', allModels.length > 1 ? 'true' : 'false');
+  modal.setAttribute('data-is-multi-model', mappedModels.length > 1 ? 'true' : 'false');
   
   console.log('✅ Modal updated with combined models');
   console.log('📦 Combined lot IDs:', combinedLotIds);
@@ -5466,7 +5485,7 @@ function recalculateTrayDistributionForAllModels(allModels) {
         type="text" 
         id="tray-${i}"
         class="tray-id-input model-bg-1" 
-        placeholder="Scan Tray Id"
+        placeholder="Scan Tray ${i + 1} Id"
         data-row-index="${i}"
         data-tray-qty="${trayQty}"
       />
@@ -5658,7 +5677,7 @@ function updateDelinkTableWithCombinedData(totalQty, selectedRows) {
       trayHTML += `
         <div class="tray-scan-tab model-bg-1">
           <label>Tray ${i}${isTopTray ? ' (Top)' : ''}</label>
-          <input type="text" class="tray-id-input" placeholder="Scan Tray ID" 
+          <input type="text" class="tray-id-input" placeholder="Scan Tray ${i} ID" 
                  data-tray-qty="${trayQty}" data-is-top-tray="${isTopTray}">
           <div class="tray-qty">Qty: ${trayQty}</div>
         </div>

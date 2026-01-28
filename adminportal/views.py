@@ -91,37 +91,37 @@ class IndexView(APIView):
                 'label': 'Day Planning',
                 'models': ['modelmasterapp.TrayId', 'modelmasterapp.DPTrayId_History'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#0b52bc'
+                'color': '#008080'
             },
             'IS': {
                 'label': 'Input Screening',
                 'models': ['InputScreening.IPTrayId', 'InputScreening.IP_Accepted_TrayScan'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#29c17a'
+                'color': '#008080'
             },
             'Brass QC': {
                 'label': 'Brass QC',
                 'models': ['Brass_QC.BrassTrayId', 'Brass_QC.Brass_Qc_Accepted_TrayScan'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#38c1dc'
+                'color': '#008080'
             },
             'Brass Audit': {
                 'label': 'Brass Audit',
                 'models': ['BrassAudit.BrassAuditTrayId', 'BrassAudit.Brass_Audit_Accepted_TrayScan'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#cf8935'
+                'color': '#008080'
             },
             'IQF': {
                 'label': 'IQF',
                 'models': ['IQF.IQFTrayId', 'IQF.IQF_Accepted_TrayScan'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#e74c3c'
+                'color': '#008080'
             },
             'Jig': {
                 'label': 'Jig Loading',
                 'models': ['modelmasterapp.TrayId'],
                 'icon': 'mdi-package-variant-closed',
-                'color': '#9b59b6'
+                'color': '#008080'
             },
         }
         
